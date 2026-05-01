@@ -1,0 +1,79 @@
+pipeline {
+  agent any
+
+  tools {
+    jdk 'jdk17'
+    maven 'maven3'
+  }
+
+  environment {
+    SCANNER_HOME = tool 'sonar-scanner'
+  }
+
+  stages {
+    stage('Git checkout') {
+      steps {
+        git branch: 'main', credentialsId: 'github-token', url: 'https://github.com/gglavanya/tic_tac_toe.git'
+      }
+    }
+
+    stage('Compile') {
+      steps { sh 'mvn -B -ntp compile' }
+    }
+
+    stage('Test') {
+      steps { sh 'mvn -B -ntp test' }
+    }
+
+    stage('Trivy FS Scan') {
+      steps { sh 'trivy fs --format table -o fs.html .' }
+    }
+
+    stage('SonarQube analysis') {
+      steps {
+        withSonarQubeEnv('sonar-server') {
+          sh '''
+            set -eux
+            "$SCANNER_HOME/bin/sonar-scanner" \
+              -Dsonar.projectKey=tic_tac_toe.app \
+              -Dsonar.projectName=tic_tac_toe.app \
+              -Dsonar.sources=src/main/java \
+              -Dsonar.java.binaries=target/classes
+          '''
+        }
+      }
+    }
+
+    stage('Publish Artifact') {
+      steps {
+        withMaven(globalMavenSettingsConfig: 'maven-settings', jdk: 'jdk17', maven: 'maven3', traceability: true) {
+          sh 'mvn -B -ntp deploy'
+        }
+      }
+    }
+
+    stage('Docker build & Tag') {
+      steps {
+        script {
+          withDockerRegistry(credentialsId: 'docker-cred', toolName:'docker') {
+            sh 'docker build -t ggopisetty1/tic_tac_toe_app:latest .'
+          }
+        }
+      }
+    }
+
+    stage('Trivy image Scan') {
+      steps { sh ' trivy image --format table -o image.html ggopisetty1/tic_tac_toe_app:latest' }
+    }
+
+    stage('Docker push image') {
+      steps {
+        script {
+          withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+            sh 'docker push ggopisetty1/tic_tac_toe_app:latest'
+          }
+        }
+      }
+    }
+  }
+}
